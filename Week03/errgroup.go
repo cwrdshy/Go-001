@@ -13,9 +13,10 @@ import (
 func main() {
 	//思路：
 	//1.main函数作为主goroutine需要等待所有
-	//http server执行完成返回(waitGroup)
-	//2.如果某一服务报错，快速返回错误，
-	//服务1和2都结束执行(errgroup)
+	//http server服务执行完成返回(waitGroup)
+	//2.如果某一服务报错（如两个服务同用1000端口），
+	//则快速返回错误，服务1和2都结束执行(errgroup)
+	//3.关闭接收错误的channel
 
 	var wg sync.WaitGroup
 	wg.Add(2) // 假设有2个http server服务
@@ -31,18 +32,10 @@ func main() {
 		cancel()
 	}()
 
-	//go func() {
-	//	signals := make(chan os.Signal, 1)
-	//	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	//	<-signals
-	//	cancel()
-	//}()
-
 	if err := eg.Wait(); err != nil {
+		fmt.Printf("Game Over!!!")
 		os.Exit(1)
 	}
-
-	fmt.Printf("Game Over!!!")
 }
 
 func firstServer(ctx context.Context, wg *sync.WaitGroup) func() error {
@@ -58,12 +51,13 @@ func firstServer(ctx context.Context, wg *sync.WaitGroup) func() error {
 
 		go func() {
 			<-ctx.Done()
-			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			shutCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 			defer cancel()
 			if err := server.Shutdown(shutCtx); err != nil {
 				errChan <- fmt.Errorf("error from shutdown NO 1 Server: %w\n", err)
 			}
 			fmt.Println("NO 1 Server closed")
+			close(errChan)
 			wg.Done()
 		}()
 
@@ -73,6 +67,7 @@ func firstServer(ctx context.Context, wg *sync.WaitGroup) func() error {
 		}
 		fmt.Println("NO 1 xxx")
 		wg.Wait()
+
 		return <-errChan
 	}
 }
@@ -85,17 +80,18 @@ func secondServer(ctx context.Context, wg *sync.WaitGroup) func() error {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`I'm is NO 2 Server`))
 		})
-		server := &http.Server{Addr: ":2000", Handler: mux}
+		server := &http.Server{Addr: ":1000", Handler: mux}
 		errChan := make(chan error, 1)
 
 		go func() {
 			<-ctx.Done()
-			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			shutCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 			defer cancel()
 			if err := server.Shutdown(shutCtx); err != nil {
 				errChan <- fmt.Errorf("error from shutdown NO 2 Server: %w\n", err)
 			}
 			fmt.Println("NO 2 Server closed")
+			close(errChan)
 			wg.Done()
 		}()
 
@@ -105,6 +101,7 @@ func secondServer(ctx context.Context, wg *sync.WaitGroup) func() error {
 		}
 		fmt.Println("NO 2 xxx")
 		wg.Wait()
+
 		return <-errChan
 	}
 }
